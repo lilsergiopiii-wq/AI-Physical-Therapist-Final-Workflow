@@ -1,0 +1,441 @@
+{
+  "name": "AI-PT Lv1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ai-pt-intake",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -160,
+        0
+      ],
+      "id": "d8249143-8c1b-4c77-8265-a04d26e7cd9d",
+      "name": "Webhook",
+      "webhookId": "e068a3d4-e943-4784-af8d-097acef30d65"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst data = items[0].json;\n\nconst intakeSummary   = data.intake_summary || \"\";\nconst flags           = data.flags || \"\";\nconst currentMovement = data.currentMovement || \"\";\nconst goals           = data.goals || \"\";\n\nconst combinedText = `\nINTAKE SUMMARY\n--------------\n${intakeSummary}\n\nGoals: ${goals || \"not specified\"}\nRed flags entered: ${flags || \"none entered\"}\nCurrent movement tolerance: ${currentMovement || \"not provided\"}\n`;\n\nreturn [\n  {\n    json: {\n      ...data,\n      combinedText,\n      userLanguage: data.userLanguage || \"auto\"\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16,
+        0
+      ],
+      "id": "cdb6dfb2-acf3-4c44-b57d-8aafafa98020",
+      "name": "Normalize Intake"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get original normalized intake from that node\nconst intake = $node['Normalize Intake'].json;\n\n// Get Perplexity rehab plan from the Message a model node\n// (If you rename the Perplexity node, update this string)\nconst perplexityPlan = $json;\n\nconst areaRaw        = intake.area || 'injured area';\nconst goal           = intake.goals || 'not specified';\nconst timeframe      = intake.timeframe || 'not specified';\nconst activityLevel  = intake.activityLevel || 'not specified';\nconst flags          = intake.flags || '';\nconst currentMove    = intake.currentMovement || 'not specified';\n\n// --- 1) Root cause style summary (universal, any body area) ---\nconst rootSummary = `\nROOT CAUSE & CONTEXT (MODEL 2)\n\nWho you are:\n- Activity level: ${activityLevel}\n- Main goal: ${goal}\n- Timeframe so far: ${timeframe}\n- Area involved: ${areaRaw}\n\nWhat might be going on:\n- The ${areaRaw} is likely irritated from a mix of load (how much stress it takes) and recovery (how much rest it gets).\n- Nearby joints and muscles may be compensating, which can shift stress to the ${areaRaw} and surrounding areas.\n- Your current movement tolerance — \"${currentMove}\" — tells us we should start with very gentle, controlled motion and slowly build up.\n`.trim();\n\n// --- 2) Common pattern notes (generic, not ankle-only) ---\nconst rootPatterns = `\nPOSSIBLE PATTERNS WE SEE (FROM AI):\n\n- Load mismatch: Recent activity, training spikes, or long sitting/standing can overload the ${areaRaw}.\n- Tissue sensitivity: The area may be sensitive to certain positions (e.g. deep bending, twisting, or high-impact steps).\n- Compensation: Hips, core, or opposite side might be doing extra work, changing how forces move through the ${areaRaw}.\n- Lifestyle factors: Sleep, stress, and overall activity can slow down recovery if they are off.\n`.trim();\n\n// --- 3) Safety notes (use flags but still generic) ---\nconst safetyNotes = `\nRED FLAGS / SAFETY:\n\n- Because this is app-based and not an in-person exam, treat all advice as EDUCATIONAL ONLY.\n- If you notice rapid worsening, visible deformity, loss of strength, numbness/tingling, or cannot use the limb normally, see urgent in-person care.\n- If pain spreads to the chest, jaw, or you feel short of breath, dizzy, or unwell, seek emergency medical attention.\n- Current intake red-flag notes: ${flags || 'none specifically reported'}.\n- Always stop any exercise that causes sharp, electric, or alarming pain and switch to gentler movement or rest.\n`.trim();\n\n// Send one combined JSON object forward\nreturn [{\n  json: {\n    ...intake,          // original normalized intake fields\n    perplexityPlan,     // full JSON from Perplexity (evidence + exercisePlan + sources)\n    rootSummary,\n    rootPatterns,\n    safetyNotes\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ],
+      "id": "04906da9-c956-419e-84d4-7a8613f71cd1",
+      "name": "Root Cause & Safety"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 1) Gemma output from HTTP Request node\nconst httpItems = $items(\"Ollama / rehab plan output\");\nconst gemmaJson = httpItems[0]?.json ?? {};\nconst gemmaText = gemmaJson.choices?.[0]?.message?.content ?? \"\";\n\n// 2) Perplexity + intake output from Root Cause & Safety node\nconst rootItems = $items(\"Root Cause & Safety\");\nconst rootJson = rootItems[0]?.json ?? {};\n\nconst area = rootJson.area || \"injured area\";\n\n// Parse exercisePlan out of perplexityPlan.message (markdown-wrapped JSON)\nlet exercisePlan = [];\nconst pp = rootJson.perplexityPlan;\n\nif (pp && typeof pp.message === \"string\") {\n  const msg = pp.message;\n\n  // Try to extract the JSON inside ```json ... ```\n  const match = msg.match(/```json\\s*([\\s\\S]*?)```/);\n  const jsonText = match ? match[1] : msg; // fallback: whole string\n\n  try {\n    const parsed = JSON.parse(jsonText);\n    exercisePlan = parsed.exercisePlan || [];\n  } catch (e) {\n    // If parsing fails, leave exercisePlan as []\n    exercisePlan = [];\n  }\n}\n\n// 3) Return a single combined item that has BOTH Gemma + Perplexity\nreturn [\n  {\n    json: {\n      area,\n      gemmaRecommendations: gemmaText,\n      exercisePlan\n    }\n  }\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        848,
+        0
+      ],
+      "id": "bf0207b5-6a7a-4262-9297-2b6f4f848b6c",
+      "name": "Exercise Plan (Model 2)"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const gemmaRecommendations = item.json.gemmaRecommendations || \"\";\n  const exercisePlan = item.json.exercisePlan || [];\n\n  // Grab a few top exercises from Perplexity\n  const topExercises = exercisePlan.slice(0, 3);\n\n  const names = topExercises.map(ex => ex.name).join(\", \");\n  const cues = topExercises.map(ex => ex.keyCues).join(\" \");\n\n  const comfyPrompt =\n    \"High-quality educational illustration of a person performing physical-therapy / rehab exercises. \" +\n    \"The image should match the current injury or condition described in the text. \" +\n    `Show 1–3 of the key exercises: ${names}. ` +\n    \"Use a neutral background and simple clothing so joints and limb positions are easy to see. \" +\n    `Use these clinical recommendations as context for what the exercises aim to achieve: ${gemmaRecommendations}. ` +\n    `Use these exercise instructions to guide the poses, joint angles, and body positions: ${cues}.`;\n\n  const imageCaption = `Illustration of key rehab exercises: ${names}.`;\n\n  return {\n    json: {\n      ...item.json,\n      comfyPrompt,\n      imageCaption\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1072,
+        0
+      ],
+      "id": "970f55cf-1f07-48bd-9b07-a81b2fb06f2e",
+      "name": "Image Prompts (for ComfyUI)"
+    },
+    {
+      "parameters": {
+        "workflow": "={\n  \"5\": {\n    \"inputs\": {\n      \"width\": 512,\n      \"height\": 512,\n      \"batch_size\": 1\n    },\n    \"class_type\": \"EmptyLatentImage\",\n    \"_meta\": {\n      \"title\": \"Empty Latent Image\"\n    }\n  },\n  \"6\": {\n    \"inputs\": {\n     \"text\": {{ JSON.stringify($json.prompt) }},\n\"clip\": [\n  \"20\",\n  1\n]\n\n    },\n    \"class_type\": \"CLIPTextEncode\",\n    \"_meta\": {\n      \"title\": \"CLIP Text Encode (Prompt)\"\n    }\n  },\n  \"7\": {\n    \"inputs\": {\n      \"text\": \"text, watermark\",\n      \"clip\": [\n        \"20\",\n        1\n      ]\n    },\n    \"class_type\": \"CLIPTextEncode\",\n    \"_meta\": {\n      \"title\": \"CLIP Text Encode (Negative)\"\n    }\n  },\n  \"8\": {\n    \"inputs\": {\n      \"samples\": [\n        \"13\",\n        0\n      ],\n      \"vae\": [\n        \"20\",\n        2\n      ]\n    },\n    \"class_type\": \"VAEDecode\",\n    \"_meta\": {\n      \"title\": \"VAE Decode\"\n    }\n  },\n  \"13\": {\n    \"inputs\": {\n      \"add_noise\": true,\n      \"noise_seed\": 0,\n      \"cfg\": 1,\n      \"model\": [\n        \"20\",\n        0\n      ],\n      \"positive\": [\n        \"6\",\n        0\n      ],\n      \"negative\": [\n        \"7\",\n        0\n      ],\n      \"sampler\": [\n        \"14\",\n        0\n      ],\n      \"sigmas\": [\n        \"22\",\n        0\n      ],\n      \"latent_image\": [\n        \"5\",\n        0\n      ]\n    },\n    \"class_type\": \"SamplerCustom\",\n    \"_meta\": {\n      \"title\": \"SamplerCustom\"\n    }\n  },\n  \"14\": {\n    \"inputs\": {\n      \"sampler_name\": \"euler_ancestral\"\n    },\n    \"class_type\": \"KSamplerSelect\",\n    \"_meta\": {\n      \"title\": \"KSamplerSelect\"\n    }\n  },\n  \"20\": {\n    \"inputs\": {\n      \"ckpt_name\": \"SDXL-TURBO\\\\sd_xl_turbo_1.0_fp16.safetensors\"\n    },\n    \"class_type\": \"CheckpointLoaderSimple\",\n    \"_meta\": {\n      \"title\": \"Load Checkpoint\"\n    }\n  },\n  \"22\": {\n    \"inputs\": {\n      \"steps\": 1,\n      \"denoise\": 1,\n      \"model\": [\n        \"20\",\n        0\n      ]\n    },\n    \"class_type\": \"SDTurboScheduler\",\n    \"_meta\": {\n      \"title\": \"SDTurboScheduler\"\n    }\n  },\n  \"27\": {\n    \"inputs\": {\n      \"filename_prefix\": \"ComfyUI\",\n      \"images\": [\n        \"8\",\n        0\n      ]\n    },\n    \"class_type\": \"SaveImage\",\n    \"_meta\": {\n      \"title\": \"Save Image\"\n    }\n  }\n}\n"
+      },
+      "type": "n8n-nodes-comfyui.comfyui",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        -208
+      ],
+      "id": "f40d6d2c-5aa0-4298-ba94-283453f0adae",
+      "name": "ComfyUI1",
+      "credentials": {
+        "comfyUIApi": {
+          "id": "6oHHEskQ0OJMJBhG",
+          "name": "ComfyUI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "6a0f73af-478e-4547-90a7-ce87ace5f83b",
+              "name": "prompt",
+              "value": "={{ 'Detailed rehab illustration of ' + $json.exercisePlan[0].name + ' for the ' + $json.area + '. Show proper form and joint alignment. Key cues: ' + $json.exercisePlan[0].keyCues + '. Style: clean physical therapy diagram, neutral background.' }}\n",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1296,
+        0
+      ],
+      "id": "0159650e-83d6-4785-8104-a8bbe2cefc98",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "messages": {
+          "message": [
+            {
+              "content": "You are an evidence-based physical therapy assistant. \nGiven a patient intake summary, you:\n- Look up or recall high-quality rehab guidelines and research.\n- Propose SAFE, conservative rehab exercises appropriate for the case.\n- Never give a diagnosis, only educational suggestions.\n- Always include clear safety warnings and advise in-person care if red flags are present.\n- Reply in JSON with the following structure:\n\n{\n  \"model\": \"perplexity-sonar\",\n  \"evidenceSummary\": \"...short paragraph explaining the reasoning...\",\n  \"exercisePlan\": [\n    {\n      \"name\": \"Exercise name\",\n      \"areaTargeted\": \"body area (e.g. ankle, knee, low back, shoulder, etc.)\",\n      \"sets\": \"3\",\n      \"reps\": \"10–15\",\n      \"frequencyPerWeek\": \"3–5\",\n      \"keyCues\": \"form cues, posture, tempo\",\n      \"stopIf\": \"what sensations or symptoms mean they should stop\"\n    }\n  ],\n  \"sources\": [\n    \"Main guideline or paper 1\",\n    \"Main guideline or paper 2\"\n  ]\n}\n",
+              "role": "system"
+            },
+            {
+              "content": "=Here is the patient intake:\n\n- Age: {{$json.age}}\n- Activity level: {{$json.activityLevel}}\n- Main goal: {{$json.goals}}\n- Body area: {{$json.area}}\n- Pain type: {{$json.painType}}\n- Timeframe: {{$json.timeframe}}\n- Red flag notes: {{$json.flags}}\n- Current movement tolerance: {{$json.currentMovement}}\n- Intake summary: {{$json.intake_summary}}\n\nTask:\nUsing high-quality rehab / sports medicine sources, fill out the JSON format described in the system message.\nMake sure the exercises and cues are appropriate for the body area above (e.g. ankle, knee, hip, low back, shoulder, elbow, etc.) and the current tolerance level.\nReturn ONLY valid JSON, with no extra explanation.\n"
+            }
+          ]
+        },
+        "simplify": true,
+        "options": {},
+        "requestOptions": {}
+      },
+      "type": "n8n-nodes-base.perplexity",
+      "typeVersion": 1,
+      "position": [
+        288,
+        -192
+      ],
+      "id": "65c1b765-fed3-4807-aabe-2d58ebff1712",
+      "name": "Perplexity output",
+      "credentials": {
+        "perplexityApi": {
+          "id": "KrtuueXmfmN4rjRF",
+          "name": "Perplexity account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:3000/api/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer sk-6b3601ad1870414fa39a81db160d2e77"
+            },
+            {
+              "name": "Content-Type",
+              "value": "=application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"model\": \"gemma:latest\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"\\nINTAKE SUMMARY\\n--------------\\nAge: 22, powerlifter, acute ankle injury with large swelling and severe pain, currently unable to walk.\\n\\nGoals: movement\\nRed flags entered: Very large swelling, can’t walk, no bone deformity, hurts very bad, hasn’t bruised yet.\\nCurrent movement tolerance: Barely able to move, mostly non-weight-bearing.\\n\"\n    }\n  ]\n}\n",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -208
+      ],
+      "id": "49e30032-966d-4559-9f2c-67c0d67f3412",
+      "name": "Ollama / rehab plan output",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "sendTo": "lilsergiopiii@gmail.com",
+        "subject": "Your AI Rehab Plan",
+        "emailType": "text",
+        "message": "={{\n(() => {\n  const gemma = $node[\"Exercise Plan (Model 2)\"].json;\n\n  // Build a readable exercise list from Gemma\n  const exercises = (gemma.exercisePlan || [])\n    .map((ex, i) => `Exercise ${i + 1}: ${ex.name}\nTarget area: ${ex.areaTargeted}\nSets / Reps: ${ex.sets} x ${ex.reps}\nFrequency: ${ex.frequencyPerWeek}\nKey cues: ${ex.keyCues}\nStop if: ${ex.stopIf}`)\n    .join(\"\\n\\n\");\n\n  // If you really want to start exactly at \"1.\" (skip any heading like \"## Recommendations:\")\n  const recRaw = gemma.gemmaRecommendations || \"\";\n  const recFromOne = recRaw.includes(\"1.\")\n    ? recRaw.substring(recRaw.indexOf(\"1.\"))\n    : recRaw;\n\n  return `${recFromOne}\n\n===== Detailed Exercise Plan =====\n${exercises}\n\nYou’ll also find a visual guide attached to this email.\n\nThis is not a substitute for seeing a doctor. If your pain worsens or doesn’t improve, please see a healthcare professional.\n\n– AI PT Rehab Assistant`;\n})()\n}}\n",
+        "options": {
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {},
+              {
+                "property": "rehabVideo"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2080,
+        -128
+      ],
+      "id": "d460bec2-3bea-4967-9bbe-828a83329bc7",
+      "name": "Send a message",
+      "webhookId": "3f028929-2258-48f1-b42e-557aa2f9ccb6",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "TUCJIPwhEMdNoDFX",
+          "name": "Gmail account 5"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "modelId": {
+          "__rl": true,
+          "value": "models/veo-3.1-generate-preview",
+          "mode": "list",
+          "cachedResultName": "models/veo-3.1-generate-preview"
+        },
+        "prompt": "={{\n(() => {\n  const plan = $node[\"Exercise Plan (Model 2)\"].json;\n  const exList = plan.exercisePlan || [];\n  const ex = exList[0];\n  const area = plan.area || \"injured area\";\n\n  // Fallback if for some reason there is no exercise\n  if (!ex) {\n    return \"Short physical therapy demo video in a clinic, showing a simple rehab exercise with clear, slow movement. Neutral background, no text, clean PT style.\";\n  }\n\n  // Build the Veo prompt as one string\n  return [\n    \"Short 10-15 second physical therapy demo video of\", ex.name, \"for the\", area + \".\",\n    \"Show one patient performing the exercise slowly and with good form.\",\n    \"Movement details:\", ex.keyCues,\n    \"Camera: fixed medium shot from the side with a clear view of the joint and leg.\",\n    \"Repeat the movement 3 to 4 times in the clip.\",\n    \"Style: clean medical physical therapy clinic, neutral background, no text or captions on screen.\"\n  ].join(\" \");\n})()\n}}\n",
+        "options": {
+          "binaryPropertyOutput": "rehabVideo"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1,
+      "position": [
+        1472,
+        -16
+      ],
+      "id": "fc3a89ae-a3a5-436d-bdec-b10b42a4e076",
+      "name": "rehab video",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "5J9C7TcU9PGAK6z5",
+          "name": "Google Gemini(PaLM) Api account 3"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1680,
+        -128
+      ],
+      "id": "4cb2b750-62c1-4034-be26-c6863ade75dc",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get all items coming from the Merge node\nconst items = $input.all();\n\n// Find the image item (from ComfyUI) and the video item (from rehab video)\nconst imageItem = items.find(item => item.binary && item.binary.data);\nconst videoItem = items.find(item => item.binary && item.binary.rehabVideo);\n\n// If something is missing, just pass everything through so it doesn't explode\nif (!imageItem || !videoItem) {\n  return items;\n}\n\n// Return ONE item that has BOTH binaries\nreturn [\n  {\n    json: {\n      // You can keep json from one side or merge both\n      ...imageItem.json,\n      ...videoItem.json,\n    },\n    binary: {\n      // image from ComfyUI\n      data: imageItem.binary.data,\n      // video from Veo / Gemini\n      rehabVideo: videoItem.binary.rehabVideo,\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1856,
+        -128
+      ],
+      "id": "a8b68803-8fc0-4aad-826d-b1825de842a4",
+      "name": "Code in JavaScript"
+    }
+  ],
+  "pinData": {
+    "Webhook": [
+      {
+        "json": {
+          "age": 22,
+          "activityLevel": "powerlifter",
+          "area": "ankle",
+          "onset": "sudden",
+          "painType": "sharp",
+          "timeframe": "days",
+          "flags": "Very large swelling, can’t walk, no bone deformity, hurts very bad, hasn’t bruised yet.",
+          "goals": "movement",
+          "currentMovement": "Barely able to move, mostly non-weight-bearing.",
+          "intake_summary": "Age: 22, powerlifter, acute ankle injury with large swelling and severe pain, currently unable to walk.",
+          "email": "user@example.com",
+          "userLanguage": "auto"
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Intake",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Intake": {
+      "main": [
+        [
+          {
+            "node": "Perplexity output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Root Cause & Safety": {
+      "main": [
+        [
+          {
+            "node": "Ollama / rehab plan output",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Exercise Plan (Model 2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Exercise Plan (Model 2)": {
+      "main": [
+        [
+          {
+            "node": "Image Prompts (for ComfyUI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image Prompts (for ComfyUI)": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "ComfyUI1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "rehab video",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ComfyUI1": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perplexity output": {
+      "main": [
+        [
+          {
+            "node": "Root Cause & Safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama / rehab plan output": {
+      "main": [
+        [
+          {
+            "node": "Exercise Plan (Model 2)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "rehab video": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "3ed67393-1e62-4284-b4e6-6c018aa3d29b",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c6a79392506bb5629ea3ecd533f59e888da180d4d2fd9e6b90c19ae1dc5eaa22"
+  },
+  "id": "fpcVWa43IcH2ZrjO",
+  "tags": []
+}
